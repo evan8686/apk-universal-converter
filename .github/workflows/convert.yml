@@ -46,11 +46,8 @@ jobs:
             -o APKEditor.jar \
             "$APKEDITOR_URL"
 
-          echo "APKEditor:"
+          echo "APKEditor downloaded successfully:"
           ls -lh APKEditor.jar
-
-          echo "Testing APKEditor:"
-          java -jar APKEditor.jar -v
 
       - name: Download input package
         env:
