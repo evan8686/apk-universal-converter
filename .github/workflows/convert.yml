@@ -1,0 +1,234 @@
+name: Convert to Universal APK
+
+on:
+workflow_dispatch:
+inputs:
+asset_name:
+description: "Release Asset filename (.apk / .apks / .apkm / .xapk)"
+required: true
+type: string
+release_tag:
+description: "Input Release tag"
+required: true
+default: "input"
+type: string
+
+permissions:
+contents: read
+
+jobs:
+convert:
+name: Convert APK to Universal APK
+runs-on: ubuntu-latest
+
+steps:
+
+  # ==========================================
+  # 1. Checkout
+  # ==========================================
+  - name: Checkout repository
+    uses: actions/checkout@v4
+
+  # ==========================================
+  # 2. Prepare Java
+  # ==========================================
+  - name: Setup Java
+    uses: actions/setup-java@v5
+    with:
+      distribution: temurin
+      java-version: "17"
+
+  # ==========================================
+  # 3. Download APKEditor
+  # ==========================================
+  - name: Download APKEditor
+    shell: bash
+    run: |
+      set -e
+
+      APKEDITOR_VERSION="1.4.9"
+
+      gh release download "V${APKEDITOR_VERSION}" \
+        --repo REAndroid/APKEditor \
+        --pattern "*.jar" \
+        --dir .
+
+      APKEDITOR=$(find . -maxdepth 1 -type f -name "*.jar" | head -n 1)
+
+      if [ -z "$APKEDITOR" ]; then
+        echo "::error::APKEditor JAR not found."
+        exit 1
+      fi
+
+      mv "$APKEDITOR" APKEditor.jar
+
+      echo "APKEditor:"
+      ls -lh APKEditor.jar
+
+      java -jar APKEditor.jar -v
+
+  # ==========================================
+  # 4. Download input Release Asset
+  # ==========================================
+  - name: Download input package
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ASSET_NAME: ${{ inputs.asset_name }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    shell: bash
+    run: |
+      set -e
+
+      mkdir -p input output
+
+      gh release download "$RELEASE_TAG" \
+        --pattern "$ASSET_NAME" \
+        --dir input
+
+      echo "Input file:"
+      ls -lh input
+
+  # ==========================================
+  # 5. Validate input
+  # ==========================================
+  - name: Validate input
+    shell: bash
+    run: |
+      set -e
+
+      FILE="input/${{ inputs.asset_name }}"
+
+      if [ ! -f "$FILE" ]; then
+        echo "::error::Input file not found: $FILE"
+        exit 1
+      fi
+
+      EXT="${FILE##*.}"
+      EXT=$(echo "$EXT" | tr '[:upper:]' '[:lower:]')
+
+      case "$EXT" in
+        apk|apks|apkm|xapk)
+          echo "Supported format: .$EXT"
+          ;;
+        *)
+          echo "::error::Unsupported file format: .$EXT"
+          exit 1
+          ;;
+      esac
+
+      echo "Input size:"
+      du -h "$FILE"
+
+  # ==========================================
+  # 6. Merge Split APKs
+  # ==========================================
+  - name: Merge APKs
+    shell: bash
+    run: |
+      set -e
+
+      INPUT="input/${{ inputs.asset_name }}"
+
+      echo "=========================================="
+      echo "APKEditor Merge"
+      echo "=========================================="
+
+      java -Xmx6g \
+        -jar APKEditor.jar \
+        m \
+        -i "$INPUT" \
+        -o output/merged.apk
+
+      if [ ! -f output/merged.apk ]; then
+        echo "::error::APKEditor did not produce merged.apk"
+        exit 1
+      fi
+
+      echo ""
+      echo "Merged APK:"
+      ls -lh output/merged.apk
+
+  # ==========================================
+  # 7. Create temporary signing key
+  # ==========================================
+  - name: Create temporary signing key
+    shell: bash
+    run: |
+      set -e
+
+      keytool \
+        -genkeypair \
+        -v \
+        -keystore output/universal.keystore \
+        -storepass android \
+        -keypass android \
+        -alias universal \
+        -keyalg RSA \
+        -keysize 2048 \
+        -validity 10000 \
+        -dname "CN=Universal APK"
+
+  # ==========================================
+  # 8. Sign APK
+  # ==========================================
+  - name: Sign Universal APK
+    shell: bash
+    run: |
+      set -e
+
+      APKSIGNER=$(find "$ANDROID_HOME/build-tools" \
+        -type f \
+        -name apksigner \
+        | sort -V \
+        | tail -n 1)
+
+      if [ -z "$APKSIGNER" ]; then
+        echo "::error::apksigner not found."
+        exit 1
+      fi
+
+      echo "Using apksigner:"
+      echo "$APKSIGNER"
+
+      "$APKSIGNER" sign \
+        --ks output/universal.keystore \
+        --ks-pass pass:android \
+        --key-pass pass:android \
+        --ks-key-alias universal \
+        --out output/universal.apk \
+        output/merged.apk
+
+  # ==========================================
+  # 9. Verify signature
+  # ==========================================
+  - name: Verify APK
+    shell: bash
+    run: |
+      set -e
+
+      APKSIGNER=$(find "$ANDROID_HOME/build-tools" \
+        -type f \
+        -name apksigner \
+        | sort -V \
+        | tail -n 1)
+
+      "$APKSIGNER" verify --verbose output/universal.apk
+
+      echo ""
+      echo "=========================================="
+      echo "Universal APK generated successfully"
+      echo "=========================================="
+
+      ls -lh output/universal.apk
+
+  # ==========================================
+  # 10. Upload final APK
+  # ==========================================
+  - name: Upload Universal APK
+    uses: actions/upload-artifact@v7
+    with:
+      name: universal-apk
+      path: output/universal.apk
+      if-no-files-found: error
+      compression-level: 0
+      retention-days: 7
