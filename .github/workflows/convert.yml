@@ -36,18 +36,20 @@ jobs:
         run: |
           set -e
 
-          APKEDITOR_VERSION="1.4.9"
+          APKEDITOR_URL="https://github.com/REAndroid/APKEditor/releases/download/V1.4.9/APKEditor-1.4.9.jar"
 
-          gh release download "V${APKEDITOR_VERSION}" \
-            --repo REAndroid/APKEditor \
-            --pattern "APKEditor-${APKEDITOR_VERSION}.jar" \
-            --dir .
+          echo "Downloading APKEditor V1.4.9..."
 
-          mv "APKEditor-${APKEDITOR_VERSION}.jar" APKEditor.jar
+          curl -L \
+            --fail \
+            --retry 3 \
+            -o APKEditor.jar \
+            "$APKEDITOR_URL"
 
           echo "APKEditor:"
           ls -lh APKEditor.jar
 
+          echo "Testing APKEditor:"
           java -jar APKEditor.jar -v
 
       - name: Download input package
